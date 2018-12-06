@@ -1,0 +1,11 @@
+[boot]
+image_path = /media/mmcsd-0-0/grisp_802_15_4/erts-10.0/bin/beam.bin
+
+[erlang]
+args = erl.rtems -- -home . -pa . -root grisp_802_15_4 -boot grisp_802_15_4/releases/0.1.0/grisp_802_15_4 -internal_epmd epmd_sup -kernel inetrc "./erl_inetrc" -sname name -setcookie cookie 
+
+[network]
+ip_self = dhcp
+wlan = enable
+hostname = host
+wpa = wpa_supplicant.conf
