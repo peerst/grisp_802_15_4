@@ -6,14 +6,29 @@
                              read_integer/2,
                              write/3 ]).
 -export([force_transmit_mode/0, force_receive_mode/0]).
--export([load_frame_control/1]).
+-export([load_frame_control/1, load_addr_fields/1, load_msdu/3]).
 -export([read_rx_fifo/0]).
+-export([load_tx_fifo/3]).
 
 force_transmit_mode() ->
     write(short, ?RFCTL, 16#02).
 
 force_receive_mode() ->
     write(short, ?RFCTL, 16#01).
+
+load_tx_fifo(FrameControlMap, DestinationMap, MSDU) ->
+    MHRLength = 19,
+    SN = 16#FA,
+    write(long, ?TX_FIFO, 19),
+    write(long, ?TX_FIFO + 1, 19 + size(MSDU)),
+    FC = load_frame_control(FrameControlMap),
+    write(long, ?TX_FIFO + 4, SN),
+    AddrFields = load_addr_fields(DestinationMap),
+    Payload = load_msdu(MHRLength, payload, MSDU),
+    #mpdu{ mhr = #mhr{ fc = FC,
+                       sn = SN,
+                       addr_fields = AddrFields },
+           msdu = Payload }.
 
 %% with #{} passed - default data frame, intra PAN without ack, sec and pending frames
 load_frame_control(Map) ->
@@ -33,6 +48,18 @@ load_frame_control(Map) ->
          intra = I,
          dst_m = DM,
          src_m = SM }.
+
+%%-spec load_addr_fields(D :: addr(), S :: addr()) -> addr_fields().
+load_addr_fields(DestinationMap) ->
+    DEADR = maps:get(deadr, DestinationMap),
+    SEADR = pmod_rf2:get_eaddr(),
+    write(long, ?TX_FIFO+5, <<DEADR/binary, SEADR/binary>>, <<>>),
+    #addr_fields{ dst = #addr{eadr = DEADR}, src = #addr{ eadr = SEADR } }.
+
+load_msdu(MHRLength, payload, Binary) ->
+    write(long, ?TX_FIFO + MHRLength + 2, Binary, <<>>),
+    Binary.
+
 
 read_rx_fifo() ->
    FrameLength = read_integer(long, ?RX_FIFO),
@@ -87,3 +114,9 @@ read(_, _, Result, 0) ->
 read(Type, Addr, Read, Length) ->
     Part = read(Type, Addr),
     read(Type, Addr+1, <<Read/binary, Part/binary>>, Length-1).
+
+write(_, _, <<>>, Addr) ->
+    Addr;
+write(Type, Addr, <<Part:8, Rest/binary>>, Result) ->
+    write(Type, Addr, Part),
+    write(Type, Addr+1, Rest, <<Part:8, Result/binary>>).
