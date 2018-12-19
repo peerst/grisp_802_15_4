@@ -3,8 +3,36 @@
 -include("include/pmod_rf2.hrl").
 -include("include/mac.hrl").
 -import(pmod_rf2_register, [ read/2,
-                             read_integer/2 ]).
+                             read_integer/2,
+                             write/3 ]).
+-export([force_transmit_mode/0, force_receive_mode/0]).
+-export([load_frame_control/1]).
 -export([read_rx_fifo/0]).
+
+force_transmit_mode() ->
+    write(short, ?RFCTL, 16#02).
+
+force_receive_mode() ->
+    write(short, ?RFCTL, 16#01).
+
+%% with #{} passed - default data frame, intra PAN without ack, sec and pending frames
+load_frame_control(Map) ->
+    T = maps:get(t, Map, 1),
+    S = maps:get(sec, Map, 0),
+    P = maps:get(pen, Map, 0),
+    A = maps:get(ack, Map, 0),
+    I = maps:get(intra, Map, 1),
+    DM = maps:get(dest_m, Map, 3),
+    SM = maps:get(src_m, Map, 3),
+    write(long, ?TX_FIFO+2, <<T:3, S:1, P:1, A:1, I:1, 0:1>>),
+    write(long, ?TX_FIFO+3, <<0:2, DM:2, 0:2, SM:2>>),
+    #fc{ t = translate_t(T),
+         sec = S,
+         pen = P,
+         ack = A,
+         intra = I,
+         dst_m = DM,
+         src_m = SM }.
 
 read_rx_fifo() ->
    FrameLength = read_integer(long, ?RX_FIFO),
