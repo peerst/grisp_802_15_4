@@ -1,14 +1,18 @@
 -module(grisp_802_15_4_mac).
 
--include("include/pmod_rf2.hrl").
+-include("include/reg.hrl").
 -include("include/mac.hrl").
--import(pmod_rf2_register, [ read/2,
-                             read_integer/2,
-                             write/3 ]).
+-import(grisp_802_15_4_reg, [ read/2,
+                              read/4,
+                              read_integer/2,
+                              write/3,
+                              write/4]).
 -export([force_transmit_mode/0, force_receive_mode/0]).
--export([load_frame_control/1, load_addr_fields/1, load_msdu/3]).
+-export([load_tx_fifo/4, load_frame_control/1, load_addr_fields/1, load_msdu/3]).
+-export([transmit/0]).
+-export([read_tx_fifo/0]).
+-export([read_addr_fields/3, read_msdu/3]).
 -export([read_rx_fifo/0]).
--export([load_tx_fifo/3]).
 
 force_transmit_mode() ->
     write(short, ?RFCTL, 16#02).
@@ -16,20 +20,23 @@ force_transmit_mode() ->
 force_receive_mode() ->
     write(short, ?RFCTL, 16#01).
 
-load_tx_fifo(FrameControlMap, DestinationMap, MSDU) ->
+transmit() ->
+    grisp_802_15_4_reg:set_bit(short, 16#1B, 0).
+
+load_tx_fifo(FrameControlMap, Sequence, DestinationMap, MSDU) ->
     MHRLength = 19,
     SN = 16#FA,
     write(long, ?TX_FIFO, 19),
     write(long, ?TX_FIFO + 1, 19 + size(MSDU)),
     FC = load_frame_control(FrameControlMap),
-    write(long, ?TX_FIFO + 4, SN),
+    write(long, ?TX_FIFO + 4, Sequence),
     AddrFields = load_addr_fields(DestinationMap),
     Payload = load_msdu(MHRLength, payload, MSDU),
-    #mpdu{ mhr = #mhr{ fc = FC,
-                       sn = SN,
-                       addr_fields = AddrFields },
-           msdu = Payload }.
-
+    MPDU = #mpdu{ mhr = #mhr{ fc = FC,
+                              sn = Sequence,
+                              addr_fields = AddrFields },
+                  msdu = Payload },
+    #frame{ length = 19 + size(MSDU), mpdu = MPDU }.
 %% with #{} passed - default data frame, intra PAN without ack, sec and pending frames
 load_frame_control(Map) ->
     T = maps:get(t, Map, 1),
@@ -51,15 +58,35 @@ load_frame_control(Map) ->
 
 %%-spec load_addr_fields(D :: addr(), S :: addr()) -> addr_fields().
 load_addr_fields(DestinationMap) ->
-    DEADR = maps:get(deadr, DestinationMap),
-    SEADR = pmod_rf2:get_eaddr(),
-    write(long, ?TX_FIFO+5, <<DEADR/binary, SEADR/binary>>, <<>>),
-    #addr_fields{ dst = #addr{eadr = DEADR}, src = #addr{ eadr = SEADR } }.
+    <<DEADR:64>> = maps:get(deadr, DestinationMap),
+    <<SEADR:64>> = grisp_802_15_4_phy:get_eaddr(),
+    write(long, ?TX_FIFO+5, <<DEADR:64, SEADR:64>>, <<>>),
+    #addr_fields{ dst = #addr{eadr = <<DEADR:64>>}, src = #addr{ eadr = <<SEADR:64>> } }.
 
 load_msdu(MHRLength, payload, Binary) ->
     write(long, ?TX_FIFO + MHRLength + 2, Binary, <<>>),
     Binary.
 
+read_tx_fifo() ->
+   HeaderLength = read_integer(long, ?TX_FIFO),
+   FrameLength = read_integer(long, ?TX_FIFO + 1),
+   <<T:3, Sec:1, Pen:1, Ack:1, Intra:1, _:1>> = read(long, ?TX_FIFO + 2),
+   <<_:2, DMode:2, _:2, SMode:2>> = read(long, ?TX_FIFO + 3),
+   <<S:8>> = read(long, ?TX_FIFO + 4),
+   Type = translate_t(T),
+   DEADR = read(long, ?TX_FIFO + 5, <<>>, 8),
+   SEADR = read(long, ?TX_FIFO + 13, <<>>, 8),
+   MPDU = #mpdu{ mhr = #mhr{ fc = #fc{ t = Type,
+                                       sec = Sec,
+                                       pen = Pen,
+                                       ack = Ack,
+                                       intra = Intra,
+                                       dst_m = DMode,
+                                       src_m = SMode },
+                             sn = S,
+                             addr_fields = #addr_fields{ dst = #addr{ eadr = DEADR }, src = #addr{ eadr = SEADR }}},
+                 msdu = read(long, ?TX_FIFO + 21, <<>>, FrameLength - HeaderLength)},
+   #frame{ length = FrameLength, mpdu = MPDU }.
 
 read_rx_fifo() ->
    FrameLength = read_integer(long, ?RX_FIFO),
@@ -68,7 +95,9 @@ read_rx_fifo() ->
    <<S:8>> = read(long, ?RX_FIFO + 3),
    Type = translate_t(T),
    MHRLength  = mhr_length(Intra, DMode, SMode),
-   MSDULength = FrameLength - MHRLength - 2,
+   MSDULength = FrameLength - MHRLength - 5,
+   FCS = read(long, ?RX_FIFO + FrameLength - 2, <<>>, 2),
+   LQI = read(long, ?RX_FIFO + FrameLength),
    MPDU = #mpdu{ mhr = #mhr{ fc = #fc{ t = Type,
                                        sec = Sec,
                                        pen = Pen,
@@ -79,7 +108,10 @@ read_rx_fifo() ->
                              sn = S,
                              addr_fields = read_addr_fields(Intra, DMode, SMode)},
                  msdu = read_msdu(Type, MHRLength, MSDULength)},
-   #frame{ length = FrameLength, mpdu = MPDU }.
+   #frame{ length = FrameLength,
+           mpdu = MPDU,
+           fcs = grisp_802_15_4_reg:decode(FCS,16),
+           lqi = grisp_802_15_4_reg:decode(LQI, 16) }.
 
 translate_t(0) ->
     beacon;
@@ -108,15 +140,3 @@ read_msdu(data, MHRLength, MSDULength) ->
 
 mhr_length(1, 3, 3) ->
     16.
-
-read(_, _, Result, 0) ->
-    Result;
-read(Type, Addr, Read, Length) ->
-    Part = read(Type, Addr),
-    read(Type, Addr+1, <<Read/binary, Part/binary>>, Length-1).
-
-write(_, _, <<>>, Addr) ->
-    Addr;
-write(Type, Addr, <<Part:8, Rest/binary>>, Result) ->
-    write(Type, Addr, Part),
-    write(Type, Addr+1, Rest, <<Part:8, Result/binary>>).
