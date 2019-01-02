@@ -8,6 +8,14 @@
 % API
 -export([initialize/0]).
 
+-export([configure_interrupts/1,
+         enable_txnie/0,
+         disable_txnie/0,
+         enable_rxie/0,
+         disable_rxie/0,
+         check_and_reset_interrupts/0,
+         rf_state/0]).
+
 -export([configure_pan_coordinator/1,
          configure_coordinator/0,
          configure_device/0]).
@@ -51,16 +59,37 @@ initialize() ->
 %%    write(short, ?BBREG6, 16#40), appended RSSI value to RX FIFO bit <6>
 %%    set bit<7> RSSIMODE1, wait for bit<0>  -> read 0x210
 
-%% interrupts
-
 %% Channel selection, RSSI ?
-    write(long, ?RFCON0, 16#03),
+    write(long, ?RFCON0, 16#F3),
 %% Set transmitter power to  0dB - default 
     write(long, ?RFCON3, 16#00),
 %% Reset RF State Machine
     write(short, ?RFCTL, 16#04),
     write(short, ?RFCTL, 16#00),
     timer:sleep(200). %% wait for min 192
+
+rf_state() ->
+    read(long, 16#20F).
+
+configure_interrupts(falling) ->
+    unset_bit(long, ?SLPCON0, 1),
+    grisp_gpio:configure(spi1_pin7, output_1);
+configure_interrupts(raising) ->
+    set_bit(long, ?SLPCON0, 1),
+    grisp_gpio:configure(spi1_pin7, output_0).
+
+enable_txnie() ->
+    unset_bit(short, ?INTCON, 0).
+disable_txnie() ->
+    set_bit(short, ?INTCON, 0).
+
+check_and_reset_interrupts() ->
+    read(short, ?INTSTAT).
+
+enable_rxie() ->
+    unset_bit(short, ?INTCON, 3).
+disable_rxie() ->
+    set_bit(short, ?INTCON, 3).
 
 set_pan_id(<<PanIDL:8, PanIDH:8>>) ->
     %% channel detection / pan_id detection can be done interchangeably
