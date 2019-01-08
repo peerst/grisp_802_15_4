@@ -9,7 +9,9 @@
          write/4,
          read_integer/2,
          set_bit/3,
-         unset_bit/3]).
+         unset_bit/3,
+         poll/3,
+         poll/4]).
 
 %% Helpers
 -export([decode/2, fifo/2]).
@@ -73,6 +75,23 @@ unset_bit(Type, Addr, Pos) ->
     Resp = read_integer(Type, Addr),
     Cmd = Bit band Resp,
     write(Type, Addr, Cmd).
+
+poll(Type, Addr, Expected) ->
+    poll(Type, Addr, Expected, 1000).
+
+poll(Type, Addr, Expected, Timeout) ->
+    timer:sleep(100),
+    case read_integer(Type, Addr) of
+        Expected ->
+            ok;
+        Other ->
+            case Timeout of
+                0 ->
+                    Other;
+                _ ->
+                    poll(Type, Addr, Expected, Timeout - 100)
+            end
+    end.
 
 %% --- Helpers -----------------------------------------------------------------------
 
