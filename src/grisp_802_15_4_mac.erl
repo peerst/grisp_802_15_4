@@ -7,20 +7,11 @@
                               read_integer/2,
                               write/3,
                               write/4]).
--export([force_transmit_mode/0, force_receive_mode/0]).
 -export([load_tx_fifo/4, load_frame_control/1, load_addr_fields/1, load_msdu/3]).
 -export([transmit/1]).
 -export([read_tx_fifo/0]).
 -export([read_addr_fields/3, read_msdu/3]).
 -export([read_rx_fifo/0]).
-
-force_transmit_mode() ->
-    write(short, ?RFCTL, 16#04),
-    write(short, ?RFCTL, 16#02).
-
-force_receive_mode() ->
-    write(short, ?RFCTL, 16#04),
-    write(short, ?RFCTL, 16#01).
 
 transmit(_Frame = #frame{ mpdu = #mpdu{ mhr = #mhr{ fc = #fc{ ack = 1 }}}}) ->
     grisp_802_15_4_reg:write(short, 16#1B, 5);
@@ -29,10 +20,14 @@ transmit(_Frame) ->
 
 %% Acknowledged frame has frame length 0 (?!?), MSDULength has to be passed as part of payload
 %% Payload = << MSDULength:8, Rest/binary >>
-load_tx_fifo(FrameControlMap, Sequence, DestinationMap, MSDU) ->
-    MHRLength = 19,
-    write(long, ?TX_FIFO, 19),
-    write(long, ?TX_FIFO + 1, 19 + size(MSDU)),
+load_tx_fifo(FC = #{ intra := 0, dst_m := 2, src_m := 2 }, S, D, MSDU) ->
+    load_tx_fifo(11, FC, S, D, MSDU);
+load_tx_fifo(FC, S, D, MSDU) ->
+    load_tx_fifo(19, FC, S, D, MSDU).
+
+load_tx_fifo(MHRLength, FrameControlMap, Sequence, DestinationMap, MSDU) ->
+    write(long, ?TX_FIFO, MHRLength),
+    write(long, ?TX_FIFO + 1, MHRLength + size(MSDU)),
     FC = load_frame_control(FrameControlMap),
     write(long, ?TX_FIFO + 4, Sequence),
     AddrFields = load_addr_fields(DestinationMap),
@@ -41,7 +36,7 @@ load_tx_fifo(FrameControlMap, Sequence, DestinationMap, MSDU) ->
                               sn = Sequence,
                               addr_fields = AddrFields },
                   msdu = Payload },
-    #frame{ length = 19 + size(MSDU), mpdu = MPDU }.
+    #frame{ length = MHRLength + size(MSDU), mpdu = MPDU }.
 %% with #{} passed - default data frame, intra PAN without ack, sec and pending frames
 load_frame_control(Map) ->
     T = maps:get(t, Map, 1),
@@ -49,7 +44,7 @@ load_frame_control(Map) ->
     P = maps:get(pen, Map, 0),
     A = maps:get(ack, Map, 0),
     I = maps:get(intra, Map, 1),
-    DM = maps:get(dest_m, Map, 3),
+    DM = maps:get(dst_m, Map, 3),
     SM = maps:get(src_m, Map, 3),
     write(long, ?TX_FIFO+2, <<T:3, S:1, P:1, A:1, I:1, 0:1>>),
     write(long, ?TX_FIFO+3, <<0:2, DM:2, 0:2, SM:2>>),
@@ -62,6 +57,17 @@ load_frame_control(Map) ->
          src_m = SM }.
 
 %%-spec load_addr_fields(D :: addr(), S :: addr()) -> addr_fields().
+
+load_addr_fields(#{ dest_panid := <<ID:16>>, dest_sadr := <<Addr:16>>}) ->
+    <<PanID:16>> = grisp_802_15_4_phy:get_pan_id(),
+    <<SSADR:16>> = grisp_802_15_4_phy:get_saddr(),
+    io:format("~p~n", [PanID]),
+    io:format("~p~n", [SSADR]),
+    write(long, ?TX_FIFO+5, <<ID:16>>, <<>>),
+    write(long, ?TX_FIFO+7, <<Addr:16>>, <<>>),
+    write(long, ?TX_FIFO+9, <<PanID:16>>, <<>>),
+    write(long, ?TX_FIFO+11, <<SSADR:16>>, <<>>),
+    #addr_fields{ dst = #addr{pan_id = ID, sadr = Addr}, src = #addr{ pan_id = PanID, sadr = SSADR } };
 load_addr_fields(DestinationMap) ->
     <<DEADR:64>> = maps:get(deadr, DestinationMap),
     <<SEADR:64>> = grisp_802_15_4_phy:get_eaddr(),
@@ -148,6 +154,12 @@ r_translate_t(data) ->
 r_translate_t(command) ->
     3.
 
+read_addr_fields(0, 2, 2) ->
+    DestID = read(long, ?RX_FIFO + 4, <<>>, 2),
+    DestAddr = read(long, ?RX_FIFO + 6, <<>>, 2),
+    SrcID = read(long, ?RX_FIFO + 8, <<>>, 2),
+    SrcAddr = read(long, ?RX_FIFO + 10, <<>>, 2),
+    #addr_fields{ dst = #addr{pan_id = DestID, sadr = DestAddr}, src = #addr{ pan_id = SrcID, sadr = SrcAddr } };
 read_addr_fields(1, 3, 3) ->
     Dest = read(long, ?RX_FIFO + 4, <<>>, 8),
     Src = read(long, ?RX_FIFO + 12, <<>>, 8),
@@ -157,5 +169,7 @@ read_addr_fields(1, 3, 3) ->
 read_msdu(data, MHRLength, MSDULength) ->
     read(long, ?RX_FIFO + MHRLength + 1, <<>>, MSDULength).
 
+mhr_length(0, 2, 2) ->
+    7;
 mhr_length(1, 3, 3) ->
     19.
