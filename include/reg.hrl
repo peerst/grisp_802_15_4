@@ -48,6 +48,7 @@
 -define(RFCON6, 16#206). %% TX filter (7), 20MHx Clock Recovery (4), Batery monitor enable (3)
 -define(RFCON7, 16#207). %% Sleep clock internal/external - selection (7-6)
 -define(RFCON8, 16#208). %% Initialize VCO (4)
+-define(RSSI, 16#210).
 -define(SLPCON1, 16#220).
 -define(BBREG2, 16#3A).
 -define(CCAEDTH, 16#3F).
@@ -61,6 +62,7 @@
                           %%
 %% RECEIVE MAC CONTROL REGISTER reception modes, pcoord/coord/device
 -define(RXMCR, 16#00). 
+-define(RXFLUSH, 16#0D).
 %% CSMA-CA MODE CONTROL REGISTER
 -define(TXMCR, 16#11).
 -define(ORDER, 16#10).
